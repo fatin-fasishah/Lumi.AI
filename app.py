@@ -157,8 +157,7 @@ def build_prompt(text, language, difficulty, n_cards, quotes):
 From the study material below, write in {language}:
 1. "summary": a revision summary of at most 350 words that fits on one page, using short paragraphs and bullet points.
 2. "flashcards": {n_cards} question-and-answer flashcards. Use {DIFFICULTY[difficulty]}. Each tests one idea. Answers max 2 sentences.
-3. "key_sentences": translate each of the {len(quotes)} KEY SENTENCES below into {language}, in the same order. Keep the meaning exact. If a sentence is already in {language}, copy it unchanged.
-Use only facts from the material.
+3. "key_sentences": translate each of the {len(quotes)} KEY SENTENCES below into {language}, in the same order. Keep the meaning exact. Translate every sentence that is not written in {language}, even short headings. Keep technical terms such as NLP or tokenization in English. Only copy a sentence unchanged if it is already written in {language}.
 Return JSON: {{"summary": "...", "flashcards": [{{"question": "...", "answer": "..."}}], "key_sentences": ["...", "..."]}}
 
 KEY SENTENCES:
