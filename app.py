@@ -2,8 +2,8 @@
 key sentences and flashcards.
 
 AI tools
-  - Gemini (Flash-Lite): writes the summary and flashcards and translates the
-    key sentences, all in ONE request
+  - Gemini (Flash-Lite): writes the summary and flashcards (one request) and
+    translates the key sentences (a second, small request)
   - Hugging Face all-MiniLM-L6-v2: picks the most important original sentences
 """
 import csv
@@ -152,16 +152,12 @@ DIFFICULTY = {
 }
 
 def build_prompt(text, language, difficulty, n_cards, quotes):
-    numbered = chr(10).join(f"{i + 1}. {q}" for i, q in enumerate(quotes))  # chr(10) = new line
     return f"""You are a study coach for diploma students.
 From the study material below, write in {language}:
 1. "summary": a revision summary of at most 350 words that fits on one page, using short paragraphs and bullet points.
 2. "flashcards": {n_cards} question-and-answer flashcards. Use {DIFFICULTY[difficulty]}. Each tests one idea. Answers max 2 sentences.
-3. "key_sentences": exactly {len(quotes)} items, one translation for each KEY SENTENCE below, in the same order. You MUST translate every sentence into {language}. Do not return the English sentence. For example, if {language} is Bahasa Melayu, "What is Natural Language Processing (NLP)?" becomes "Apakah Pemprosesan Bahasa Semula Jadi (NLP)?" and "Uses NLP + Machine Learning to interpret text." becomes "Menggunakan NLP + Pembelajaran Mesin untuk mentafsir teks." Keep only names and acronyms such as NLP in English. Only copy a sentence unchanged if it is already written in {language}.
-Return JSON: {{"summary": "...", "flashcards": [{{"question": "...", "answer": "..."}}], "key_sentences": ["...", "..."]}}
-
-KEY SENTENCES:
-{numbered}
+Use only facts from the material.
+Return JSON: {{"summary": "...", "flashcards": [{{"question": "...", "answer": "..."}}]}}
 
 MATERIAL:
 {text[:MAX_CHARS]}"""
@@ -173,9 +169,9 @@ class Flashcard(BaseModel):
 class StudyPack(BaseModel):  # the exact JSON shape Gemini must return
     summary: str
     flashcards: list[Flashcard]
-    key_sentences: list[str]
 
-def ask_gemini(api_key, prompt):
+def ask_gemini(api_key, prompt, schema=None):
+    schema = schema or StudyPack
     from google import genai
     from google.genai import errors, types
     client = genai.Client(api_key=api_key)
@@ -186,7 +182,7 @@ def ask_gemini(api_key, prompt):
                     model=name,
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json",
-                                                       response_schema=StudyPack),
+                                                       response_schema=schema),
                 )
                 return json.loads(resp.text), name
             except errors.APIError as e:
@@ -194,6 +190,22 @@ def ask_gemini(api_key, prompt):
                     raise
                 time.sleep(2)
     raise RuntimeError("All Gemini models are busy right now. Please try again in a minute.")
+
+class Translation(BaseModel):
+    translations: list[str]
+
+def translate_key_sentences(api_key, sentences, language):
+    """A separate small Gemini request, so translating is its only job."""
+    numbered = chr(10).join(f"{i + 1}. {s}" for i, s in enumerate(sentences))  # chr(10) = new line
+    prompt = f"""Translate each of the {len(sentences)} sentences below into {language}.
+Return exactly {len(sentences)} items, in the same order. Do not return the English sentence.
+Keep acronyms such as NLP unchanged. Only copy a sentence if it is already written in {language}.
+Return JSON: {{"translations": ["...", "..."]}}
+
+SENTENCES:
+{numbered}"""
+    data, _ = ask_gemini(api_key, prompt, Translation)
+    return data["translations"]
 
 def cards_to_csv(cards):
     buf = io.StringIO()
@@ -358,10 +370,15 @@ with left:
                 st.write(f"📖 Read {used} {unit} ({len(text.split()):,} words)")
                 st.write("📌 Finding key sentences (Hugging Face MiniLM)...")
                 originals = key_sentences(text, load_minilm())
-                st.write("🧠 Writing summary and flashcards, translating key sentences (Gemini)...")
+                st.write("🧠 Writing summary and flashcards (Gemini)...")
                 result, model_used = ask_gemini(
                     api_key, build_prompt(text, language, difficulty, n_cards, originals))
-                translated = [str(t) for t in (result.get("key_sentences") or [])]
+                st.write("🌏 Translating key sentences (Gemini)...")
+                try:
+                    translated = [str(t) for t in
+                                  translate_key_sentences(api_key, originals, language)]
+                except Exception:   # keep the pack even if translating fails
+                    translated = []
                 note = ""
                 if len(translated) != len(originals):
                     note = (f"Gemini translated {len(translated)} of {len(originals)} key "
