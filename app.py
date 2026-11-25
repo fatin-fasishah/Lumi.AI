@@ -20,7 +20,7 @@ import streamlit as st
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
 
-GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
 MINILM = "sentence-transformers/all-MiniLM-L6-v2"
 MAX_CHARS = 120_000  # about 50 pages of text sent to Gemini
 MYT = timezone(timedelta(hours=8))  # Malaysia time for the history list
@@ -186,10 +186,13 @@ def ask_gemini(api_key, prompt, schema=None):
                 )
                 return json.loads(resp.text), name
             except errors.APIError as e:
+                if e.code == 404:                   # model not available: try the next one
+                    break
                 if e.code not in (429, 500, 503):   # only retry when busy
                     raise
                 time.sleep(2)
-    raise RuntimeError("All Gemini models are busy right now. Please try again in a minute.")
+    raise RuntimeError("No Gemini model could answer right now (busy, over the free limit, "
+                       "or unavailable). Please try again in a minute.")
 
 class Translation(BaseModel):
     translations: list[str]
