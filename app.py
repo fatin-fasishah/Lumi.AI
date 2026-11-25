@@ -197,18 +197,65 @@ def ask_gemini(api_key, prompt, schema=None):
 class Translation(BaseModel):
     translations: list[str]
 
+
 def translate_key_sentences(api_key, sentences, language):
-    """A separate small Gemini request, so translating is its only job."""
-    numbered = chr(10).join(f"{i + 1}. {s}" for i, s in enumerate(sentences))  # chr(10) = new line
-    prompt = f"""Translate each of the {len(sentences)} sentences below into {language}.
-Return exactly {len(sentences)} items, in the same order. Do not return the English sentence.
-Keep acronyms such as NLP unchanged. Only copy a sentence if it is already written in {language}.
-Return JSON: {{"translations": ["...", "..."]}}
+    """Translate every extracted key sentence into the selected language."""
+    if not sentences:
+        return []
+
+    numbered = "\\n".join(
+        f"{i + 1}. {sentence}"
+        for i, sentence in enumerate(sentences)
+    )
+
+    if language == "Bahasa Melayu":
+        language_instructions = """
+- Use natural, grammatically correct Bahasa Melayu Malaysia.
+- Do NOT use Indonesian vocabulary or phrasing.
+- Translate every sentence completely; do not leave ordinary English
+  wording untranslated.
+- Preserve the original meaning and academic/technical accuracy.
+- Keep standard acronyms and names such as AI, NLP, ICT and CPU unchanged.
+"""
+    else:
+        language_instructions = """
+- Use clear, natural, grammatically correct English.
+- Translate every sentence completely.
+- Preserve the original meaning and academic/technical accuracy.
+"""
+
+    prompt = f"""You are a professional academic translator.
+
+Translate all {len(sentences)} sentences into {language}.
+
+STRICT REQUIREMENTS:
+{language_instructions}
+1. Return exactly {len(sentences)} translations.
+2. Keep the same order as the input.
+3. Do not skip, merge, summarize, or explain any sentence.
+4. Return only the requested JSON structure.
+
+Return JSON:
+{{"translations": ["translation 1", "translation 2"]}}
 
 SENTENCES:
 {numbered}"""
+
     data, _ = ask_gemini(api_key, prompt, Translation)
-    return data["translations"]
+    translations = data.get("translations", [])
+
+    if len(translations) != len(sentences):
+        raise ValueError(
+            f"Expected {len(sentences)} translations, "
+            f"but Gemini returned {len(translations)}."
+        )
+
+    translations = [str(item).strip() for item in translations]
+
+    if any(not item for item in translations):
+        raise ValueError("Gemini returned one or more empty translations.")
+
+    return translations
 
 def cards_to_csv(cards):
     buf = io.StringIO()
@@ -378,18 +425,37 @@ with left:
                     api_key, build_prompt(text, language, difficulty, n_cards, originals))
                 st.write("🌏 Translating key sentences (Gemini)...")
                 try:
-                    translated = [str(t) for t in
-                                  translate_key_sentences(api_key, originals, language)]
-                except Exception:   # keep the pack even if translating fails
+                    translated = translate_key_sentences(
+                        api_key,
+                        originals,
+                        language
+                    )
+                    note = ""
+                    st.write(
+                        f"Successfully translated {len(translated)} "
+                        f"key sentences into {language}."
+                    )
+                except Exception as e:
+                    # Keep the study pack usable, but expose the real translation error.
                     translated = []
-                note = ""
-                if len(translated) != len(originals):
-                    note = (f"Gemini translated {len(translated)} of {len(originals)} key "
-                            "sentences. Any missing ones are shown in the original language.")
-                # use each translation if there is one, otherwise keep the original
-                quotes = [{"original": o,
-                           "translated": translated[i] if i < len(translated) else o}
-                          for i, o in enumerate(originals)]
+                    note = (
+                        f"Key sentence translation failed "
+                        f"({type(e).__name__}): {e}"
+                    )
+                    st.warning(note)
+
+                # Preserve every original sentence if its translation is unavailable.
+                quotes = [
+                    {
+                        "original": original,
+                        "translated": (
+                            translated[i]
+                            if i < len(translated) and translated[i]
+                            else original
+                        )
+                    }
+                    for i, original in enumerate(originals)
+                ]
                 status.update(label=f"Done in {time.time() - start:.1f} seconds!",
                               state="complete", expanded=False)
             st.session_state.history.append({
